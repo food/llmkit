@@ -11,7 +11,8 @@ import requests
 
 __all__ = ["LLMError", "chat", "chat_json"]
 
-_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# An unclosed block (length limit hit while thinking) runs to the end of the text.
+_THINK = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL | re.IGNORECASE)
 _FENCE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
 
 
@@ -61,7 +62,10 @@ def _parse_object(text: str) -> dict:
     start, end = text.find("{"), text.rfind("}")
     if start >= 0 and end > start:
         text = text[start:end + 1]
-    return json.loads(text)
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise json.JSONDecodeError("expected a JSON object", text, 0)
+    return value
 
 
 def chat(prompt: str, system: str | None = None, *, model: str | None = None,

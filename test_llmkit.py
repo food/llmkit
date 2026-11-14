@@ -34,7 +34,10 @@ def reply(content, **extra):
 
 
 class Gateway(BaseHTTPRequestHandler):
+    """Fake LiteLLM: records each request body and answers with the next queued reply."""
+
     def do_POST(self):
+        """Serve one chat completion."""
         requests_seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
         body = json.dumps(replies.pop(0)).encode()
         self.send_response(200)
@@ -44,7 +47,7 @@ class Gateway(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, *args):
-        pass
+        """Keep the test output quiet."""
 
 
 server = HTTPServer(("127.0.0.1", 0), Gateway)
@@ -78,6 +81,10 @@ try:
 except llmkit.LLMError as e:
     assert "2 attempts" in str(e), e
 
+# --- no object at all (bare number) counts as broken and is asked again
+replies += [reply("42"), reply("{\"kcal\": 42}")]
+assert llmkit.chat_json("x") == {"kcal": 42}
+
 # --- empty content, answer only in the reasoning channel
 replies.append(reply(None, reasoning_content="{\"kcal\": 67}"))
 assert llmkit.chat_json("x") == {"kcal": 67}
@@ -89,6 +96,10 @@ body = requests_seen[-1]
 assert body["model"] == "vision" and "response_format" not in body, body
 assert body["messages"][0]["content"][1] == {
     "type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}}, body
+
+# --- chat: thinking cut off by the length limit leaves no answer
+replies.append(reply("Kurz: <think>der Nutzer will {\"a\": 1"))
+assert llmkit.chat("x") == "Kurz:"
 
 # --- chat: empty answer is an error, not an empty string
 replies.append(reply(None))
