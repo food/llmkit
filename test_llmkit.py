@@ -57,13 +57,13 @@ os.environ["LITELLM_MODEL"] = "fallback-chat"
 
 # --- real reply: JSON mode on, default model from the environment
 replies.append(REAL)
-assert llmkit.chat_json("Magerquark", system="Nur JSON.") == {"kcal": 67, "protein_g": 12}
+assert llmkit.chat_json("100 g low-fat quark", system="JSON only.") == {"kcal": 67, "protein_g": 12}
 body = requests_seen[-1]
 assert body["model"] == "fallback-chat" and body["response_format"] == {"type": "json_object"}, body
-assert body["messages"][0] == {"role": "system", "content": "Nur JSON."}, body
+assert body["messages"][0] == {"role": "system", "content": "JSON only."}, body
 
 # --- thinking block, code fence and chatter around the object
-replies.append(reply("<think>erst rechnen</think>Hier:\n```json\n{\"kcal\": 67}\n```\nFertig."))
+replies.append(reply("<think>work it out first</think>Here:\n```json\n{\"kcal\": 67}\n```\nDone."))
 assert llmkit.chat_json("x") == {"kcal": 67}
 
 # --- broken JSON: asked again with the parser error, second answer counts
@@ -74,7 +74,7 @@ assert retry[-2] == {"role": "assistant", "content": "{\"kcal\": 67,"}, retry
 assert retry[-1]["role"] == "user" and "not valid JSON" in retry[-1]["content"], retry
 
 # --- broken twice: gives up with LLMError instead of a bare JSONDecodeError
-replies += [reply("kein json"), reply("immer noch nicht")]
+replies += [reply("not json"), reply("still not json")]
 try:
     llmkit.chat_json("x")
     raise AssertionError("expected LLMError")
@@ -90,16 +90,16 @@ replies.append(reply(None, reasoning_content="{\"kcal\": 67}"))
 assert llmkit.chat_json("x") == {"kcal": 67}
 
 # --- chat: plain text, explicit model, images as content parts, no JSON mode
-replies.append(reply("<think>hm</think>  Drei Saetze Coaching.  "))
-assert llmkit.chat("Plan?", model="vision", images=["QUJD"]) == "Drei Saetze Coaching."
+replies.append(reply("<think>hm</think>  Three sentences of coaching.  "))
+assert llmkit.chat("Plan?", model="vision", images=["QUJD"]) == "Three sentences of coaching."
 body = requests_seen[-1]
 assert body["model"] == "vision" and "response_format" not in body, body
 assert body["messages"][0]["content"][1] == {
     "type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}}, body
 
-# --- chat: thinking cut off by the length limit leaves no answer
-replies.append(reply("Kurz: <think>der Nutzer will {\"a\": 1"))
-assert llmkit.chat("x") == "Kurz:"
+# --- chat: thinking cut off by the length limit is dropped up to the end
+replies.append(reply("Short: <think>the user wants {\"a\": 1"))
+assert llmkit.chat("x") == "Short:"
 
 # --- chat: empty answer is an error, not an empty string
 replies.append(reply(None))
