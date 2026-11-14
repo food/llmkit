@@ -73,6 +73,21 @@ retry = requests_seen[-1]["messages"]
 assert retry[-2] == {"role": "assistant", "content": "{\"kcal\": 67,"}, retry
 assert retry[-1]["role"] == "user" and "not valid JSON" in retry[-1]["content"], retry
 
+# --- small slips are repaired without spending a retry
+before = len(requests_seen)
+replies.append(reply('{"title": "Jeans", "price_eur": NaN, "brand": , "tags": ["denim", "blue",],}'))
+assert llmkit.chat_json("x") == {"title": "Jeans", "price_eur": None, "brand": None,
+                                 "tags": ["denim", "blue"]}
+assert len(requests_seen) == before + 1
+
+# --- NaN on its own is valid for Python's parser, it still comes back as None
+replies.append(reply('{"price_eur": NaN}'))
+assert llmkit.chat_json("x") == {"price_eur": None}
+
+# --- a valid reply is never touched by the repair
+replies.append(reply('{"note": "a, } and NaN stay as they are"}'))
+assert llmkit.chat_json("x") == {"note": "a, } and NaN stay as they are"}
+
 # --- broken twice: gives up with LLMError instead of a bare JSONDecodeError
 replies += [reply("not json"), reply("still not json")]
 try:
