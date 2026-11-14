@@ -80,6 +80,10 @@ assert llmkit.chat_json("x") == {"title": "Jeans", "price_eur": None, "brand": N
                                  "tags": ["denim", "blue"]}
 assert len(requests_seen) == before + 1
 
+# --- NaN on its own is valid for Python's parser, it still comes back as None
+replies.append(reply('{"price_eur": NaN}'))
+assert llmkit.chat_json("x") == {"price_eur": None}
+
 # --- a valid reply is never touched by the repair
 replies.append(reply('{"note": "a, } and NaN stay as they are"}'))
 assert llmkit.chat_json("x") == {"note": "a, } and NaN stay as they are"}

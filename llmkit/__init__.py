@@ -57,10 +57,14 @@ def _complete(messages: list[dict], model: str | None, json_mode: bool,
 
 
 def _repair(text: str) -> str:
-    """Fix the slips models make most: trailing commas, empty values, NaN."""
+    """Fix the slips models make most: trailing commas and empty values."""
     text = re.sub(r",\s*([}\]])", r"\1", text)
-    text = re.sub(r":\s*(?=[,}])", ": null", text)
-    return re.sub(r"\bNaN\b", "null", text)
+    return re.sub(r":\s*(?=[,}])", ": null", text)
+
+
+def _loads(text: str):
+    """json.loads with NaN and Infinity read as null instead of floats."""
+    return json.loads(text, parse_constant=lambda _: None)
 
 
 def _parse_object(text: str) -> dict:
@@ -70,12 +74,12 @@ def _parse_object(text: str) -> dict:
     if start >= 0 and end > start:
         text = text[start:end + 1]
     try:
-        value = json.loads(text)
+        value = _loads(text)
     except json.JSONDecodeError as e:
         # The repair only runs on text that is broken anyway, so it cannot
         # alter a valid reply. If it does not help, report the original error.
         try:
-            value = json.loads(_repair(text))
+            value = _loads(_repair(text))
         except json.JSONDecodeError:
             raise e from None
     if not isinstance(value, dict):
