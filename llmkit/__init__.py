@@ -56,13 +56,28 @@ def _complete(messages: list[dict], model: str | None, json_mode: bool,
     return answer, reasoning
 
 
+def _repair(text: str) -> str:
+    """Fix the slips models make most: trailing commas, empty values, NaN."""
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    text = re.sub(r":\s*(?=[,}])", ": null", text)
+    return re.sub(r"\bNaN\b", "null", text)
+
+
 def _parse_object(text: str) -> dict:
-    """The JSON object in a reply, tolerating code fences and talk around it."""
+    """The JSON object in a reply, tolerating code fences, talk around it and small slips."""
     text = _FENCE.sub("", _THINK.sub("", text).strip())
     start, end = text.find("{"), text.rfind("}")
     if start >= 0 and end > start:
         text = text[start:end + 1]
-    value = json.loads(text)
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as e:
+        # The repair only runs on text that is broken anyway, so it cannot
+        # alter a valid reply. If it does not help, report the original error.
+        try:
+            value = json.loads(_repair(text))
+        except json.JSONDecodeError:
+            raise e from None
     if not isinstance(value, dict):
         raise json.JSONDecodeError("expected a JSON object", text, 0)
     return value

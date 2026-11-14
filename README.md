@@ -8,7 +8,7 @@ It covers the two calls our apps make over and over: a plain chat answer and a J
 Pin a tag in `requirements.txt`:
 
 ```
-llmkit @ https://github.com/food/llmkit/archive/refs/tags/v0.1.0.tar.gz
+llmkit @ https://github.com/food/llmkit/archive/refs/tags/v0.2.0.tar.gz
 ```
 
 ## Configuration
@@ -31,8 +31,8 @@ tags = llmkit.chat_json("Describe the item.", model="vision", images=[jpeg_base6
 ```
 
 `chat_json` turns on JSON mode and copes with what models actually send back:
-`<think>` blocks, code fences, text around the object, and an empty answer with the
-JSON in the reasoning channel. If the reply still does not parse, the model gets the
+`<think>` blocks, code fences, text around the object, trailing commas, empty values,
+`NaN`, and an empty answer with the JSON in the reasoning channel. If the reply still does not parse, the model gets the
 parser error and one more try (`retries=1`).
 
 Both functions raise `llmkit.LLMError` when no usable answer comes back. HTTP errors
