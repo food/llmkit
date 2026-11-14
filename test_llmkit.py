@@ -20,7 +20,7 @@ REAL = {
     "x_groq": {"id": "req_00000000000000000000000000", "seed": 0}, "service_tier": "auto",
 }
 
-replies, requests_seen = [], []
+replies, requests_seen, auth_seen = [], [], []
 
 
 def reply(content, **extra):
@@ -39,6 +39,7 @@ class Gateway(BaseHTTPRequestHandler):
     def do_POST(self):
         """Serve one chat completion."""
         requests_seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+        auth_seen.append(self.headers.get("Authorization"))
         status, answer = replies.pop(0) if isinstance(replies[0], tuple) else (200, replies.pop(0))
         body = json.dumps(answer).encode()
         self.send_response(status)
@@ -66,6 +67,14 @@ assert body["messages"][0] == {"role": "system", "content": "JSON only."}, body
 # --- thinking block, code fence and chatter around the object
 replies.append(reply("<think>work it out first</think>Here:\n```json\n{\"kcal\": 67}\n```\nDone."))
 assert llmkit.chat_json("x") == {"kcal": 67}
+
+# --- no key configured: no Authorization header; with a key: Bearer
+assert auth_seen[-1] is None, auth_seen
+os.environ["LITELLM_API_KEY"] = "sk-test"
+replies.append(reply("{}"))
+llmkit.chat_json("x")
+assert auth_seen[-1] == "Bearer sk-test", auth_seen
+del os.environ["LITELLM_API_KEY"]
 
 # --- broken JSON: asked again with the parser error, second answer counts
 replies += [reply("{\"kcal\": 67,"), reply("{\"kcal\": 67}")]

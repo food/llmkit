@@ -17,6 +17,7 @@ llmkit @ https://github.com/food/llmkit/archive/refs/tags/v0.3.0.tar.gz
 |---|---|
 | `LITELLM_URL` | Gateway base URL, e.g. `http://litellm:4000` |
 | `LITELLM_MODEL` | Default model or lane; `model=` overrides it per call |
+| `LITELLM_API_KEY` | Optional key, sent as `Authorization: Bearer` |
 
 Both are read on every call.
 

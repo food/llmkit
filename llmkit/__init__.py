@@ -1,7 +1,8 @@
 """Small client for an OpenAI-compatible LiteLLM gateway.
 
-Gateway URL and default model come from ``LITELLM_URL`` and ``LITELLM_MODEL``.
-They are read on every call, so apps and tests can set them late.
+Gateway URL and default model come from ``LITELLM_URL`` and ``LITELLM_MODEL``,
+an optional key from ``LITELLM_API_KEY``. They are read on every call, so apps
+and tests can set them late.
 """
 import json
 import os
@@ -51,7 +52,10 @@ def _complete(messages: list[dict], model: str | None, json_mode: bool,
     if max_tokens:
         body["max_tokens"] = max_tokens
     try:
-        resp = requests.post(f"{url}/v1/chat/completions", json=body, timeout=timeout)
+        key = os.environ.get("LITELLM_API_KEY")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        resp = requests.post(f"{url}/v1/chat/completions", json=body, headers=headers,
+                             timeout=timeout)
         resp.raise_for_status()
         msg = resp.json()["choices"][0]["message"]
     except (requests.RequestException, ValueError, LookupError, TypeError) as e:
