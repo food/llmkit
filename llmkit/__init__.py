@@ -1,11 +1,13 @@
 """Small client for an OpenAI-compatible LiteLLM gateway.
 
-Gateway URL and default model come from ``LITELLM_URL`` and ``LITELLM_MODEL``.
-They are read on every call, so apps and tests can set them late.
+Gateway URL and default model come from ``LITELLM_URL`` and ``LITELLM_MODEL``,
+an optional key from ``LITELLM_API_KEY``. They are read on every call, so apps
+and tests can set them late.
 """
 import json
 import os
 import re
+from typing import Any, Callable
 
 import requests
 
@@ -41,15 +43,23 @@ def _messages(prompt: str, system: str | None, images: list[str] | None) -> list
 
 
 def _complete(messages: list[dict], model: str | None, json_mode: bool,
-              temperature: float, timeout: float) -> tuple[str, str]:
+              temperature: float, timeout: float, max_tokens: int | None) -> tuple[str, str]:
     """One completion; returns (answer, reasoning) with thinking blocks removed."""
     url, model = _settings(model)
     body = {"model": model, "messages": messages, "temperature": temperature}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    resp = requests.post(f"{url}/v1/chat/completions", json=body, timeout=timeout)
-    resp.raise_for_status()
-    msg = resp.json()["choices"][0]["message"]
+    if max_tokens:
+        body["max_tokens"] = max_tokens
+    try:
+        key = os.environ.get("LITELLM_API_KEY")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        resp = requests.post(f"{url}/v1/chat/completions", json=body, headers=headers,
+                             timeout=timeout)
+        resp.raise_for_status()
+        msg = resp.json()["choices"][0]["message"]
+    except (requests.RequestException, ValueError, LookupError, TypeError) as e:
+        raise LLMError(f"gateway call failed: {e}") from e
     answer = _THINK.sub("", msg.get("content") or "").strip()
     # Providers name the thinking channel differently (Groq: reasoning).
     reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
@@ -89,9 +99,10 @@ def _parse_object(text: str) -> dict:
 
 def chat(prompt: str, system: str | None = None, *, model: str | None = None,
          json_mode: bool = False, images: list[str] | None = None,
-         temperature: float = 0.2, timeout: float = 90) -> str:
+         temperature: float = 0.2, timeout: float = 90, max_tokens: int | None = None) -> str:
     """Send one prompt and return the answer text."""
-    answer, _ = _complete(_messages(prompt, system, images), model, json_mode, temperature, timeout)
+    answer, _ = _complete(_messages(prompt, system, images), model, json_mode,
+                          temperature, timeout, max_tokens)
     if not answer:
         raise LLMError("empty response")
     return answer
@@ -99,24 +110,28 @@ def chat(prompt: str, system: str | None = None, *, model: str | None = None,
 
 def chat_json(prompt: str, system: str | None = None, *, model: str | None = None,
               images: list[str] | None = None, temperature: float = 0.2,
-              timeout: float = 90, retries: int = 1) -> dict:
+              timeout: float = 90, max_tokens: int | None = None, retries: int = 1,
+              check: Callable[[dict], Any] | None = None) -> Any:
     """Send one prompt in JSON mode and return the parsed object.
 
-    An unparsable reply is answered with the parser error and asked again,
-    up to ``retries`` times. A thinking model that leaves the answer empty
-    and puts the JSON into its reasoning channel is read from there.
+    ``check`` gets the parsed object and returns what the caller receives
+    instead (e.g. a Pydantic model's ``model_validate``). An unparsable reply
+    or a ``ValueError`` from ``check`` is answered with the error and asked
+    again, up to ``retries`` times. A thinking model that leaves the answer
+    empty and puts the JSON into its reasoning channel is read from there.
     """
     messages = _messages(prompt, system, images)
     for attempt in range(retries + 1):
-        answer, reasoning = _complete(messages, model, True, temperature, timeout)
+        answer, reasoning = _complete(messages, model, True, temperature, timeout, max_tokens)
         reply = answer or reasoning
         try:
-            return _parse_object(reply)
-        except json.JSONDecodeError as e:
+            value = _parse_object(reply)
+            return check(value) if check else value
+        except ValueError as e:  # JSONDecodeError and Pydantic's ValidationError included
             error = e
         messages = messages + [
             {"role": "assistant", "content": reply},
-            {"role": "user", "content": f"Your reply was not valid JSON ({error}). "
+            {"role": "user", "content": f"Your reply was not usable ({error}). "
                                         "Reply with the JSON object only."},
         ]
-    raise LLMError(f"no valid JSON after {retries + 1} attempts: {error}")
+    raise LLMError(f"no usable JSON after {retries + 1} attempts: {error}")

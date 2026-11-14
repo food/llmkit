@@ -20,7 +20,7 @@ REAL = {
     "x_groq": {"id": "req_00000000000000000000000000", "seed": 0}, "service_tier": "auto",
 }
 
-replies, requests_seen = [], []
+replies, requests_seen, auth_seen = [], [], []
 
 
 def reply(content, **extra):
@@ -39,8 +39,10 @@ class Gateway(BaseHTTPRequestHandler):
     def do_POST(self):
         """Serve one chat completion."""
         requests_seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-        body = json.dumps(replies.pop(0)).encode()
-        self.send_response(200)
+        auth_seen.append(self.headers.get("Authorization"))
+        status, answer = replies.pop(0) if isinstance(replies[0], tuple) else (200, replies.pop(0))
+        body = json.dumps(answer).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -66,12 +68,34 @@ assert body["messages"][0] == {"role": "system", "content": "JSON only."}, body
 replies.append(reply("<think>work it out first</think>Here:\n```json\n{\"kcal\": 67}\n```\nDone."))
 assert llmkit.chat_json("x") == {"kcal": 67}
 
+# --- no key configured: no Authorization header; with a key: Bearer
+assert auth_seen[-1] is None, auth_seen
+os.environ["LITELLM_API_KEY"] = "sk-test"
+replies.append(reply("{}"))
+llmkit.chat_json("x")
+assert auth_seen[-1] == "Bearer sk-test", auth_seen
+del os.environ["LITELLM_API_KEY"]
+
 # --- broken JSON: asked again with the parser error, second answer counts
 replies += [reply("{\"kcal\": 67,"), reply("{\"kcal\": 67}")]
 assert llmkit.chat_json("x") == {"kcal": 67}
 retry = requests_seen[-1]["messages"]
 assert retry[-2] == {"role": "assistant", "content": "{\"kcal\": 67,"}, retry
-assert retry[-1]["role"] == "user" and "not valid JSON" in retry[-1]["content"], retry
+assert retry[-1]["role"] == "user" and "not usable" in retry[-1]["content"], retry
+
+# --- check: its ValueError is fed back, its return value is handed out
+def kcal_check(obj):
+    """Stand-in for a Pydantic model_validate."""
+    if not isinstance(obj.get("kcal"), int):
+        raise ValueError("kcal must be an integer")
+    return obj["kcal"]
+
+
+replies += [reply('{"kcal": "viel"}'), reply('{"kcal": 67}')]
+assert llmkit.chat_json("x", check=kcal_check, max_tokens=300) == 67
+retry = requests_seen[-1]
+assert "kcal must be an integer" in retry["messages"][-1]["content"], retry
+assert retry["max_tokens"] == 300, retry
 
 # --- small slips are repaired without spending a retry
 before = len(requests_seen)
@@ -108,7 +132,7 @@ assert llmkit.chat_json("x") == {"kcal": 67}
 replies.append(reply("<think>hm</think>  Three sentences of coaching.  "))
 assert llmkit.chat("Plan?", model="vision", images=["QUJD"]) == "Three sentences of coaching."
 body = requests_seen[-1]
-assert body["model"] == "vision" and "response_format" not in body, body
+assert body["model"] == "vision" and "response_format" not in body and "max_tokens" not in body, body
 assert body["messages"][0]["content"][1] == {
     "type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}}, body
 
@@ -123,6 +147,24 @@ try:
     raise AssertionError("expected LLMError")
 except llmkit.LLMError:
     pass
+
+# --- gateway errors arrive as LLMError: rate limit answer and a dead gateway
+replies.append((429, {"error": {"message": "No deployments available for selected model",
+                                "type": "None", "param": "None", "code": "429"}}))
+try:
+    llmkit.chat_json("x")
+    raise AssertionError("expected LLMError")
+except llmkit.LLMError as e:
+    assert "429" in str(e), e
+
+live_url = os.environ["LITELLM_URL"]
+os.environ["LITELLM_URL"] = "http://127.0.0.1:9"
+try:
+    llmkit.chat("x", timeout=2)
+    raise AssertionError("expected LLMError")
+except llmkit.LLMError as e:
+    assert "gateway call failed" in str(e), e
+os.environ["LITELLM_URL"] = live_url
 
 # --- missing configuration is reported before any request
 del os.environ["LITELLM_MODEL"]
