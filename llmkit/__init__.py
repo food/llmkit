@@ -43,8 +43,8 @@ def _messages(prompt: str, system: str | None, images: list[str] | None) -> list
 
 
 def _complete(messages: list[dict], model: str | None, json_mode: bool,
-              temperature: float, timeout: float, max_tokens: int | None) -> tuple[str, str]:
-    """One completion; returns (answer, reasoning) with thinking blocks removed."""
+              temperature: float, timeout: float, max_tokens: int | None) -> str:
+    """One completion; returns the answer with thinking blocks removed."""
     url, model = _settings(model)
     body = {"model": model, "messages": messages, "temperature": temperature}
     if json_mode:
@@ -57,13 +57,15 @@ def _complete(messages: list[dict], model: str | None, json_mode: bool,
         resp = requests.post(f"{url}/v1/chat/completions", json=body, headers=headers,
                              timeout=timeout)
         resp.raise_for_status()
-        msg = resp.json()["choices"][0]["message"]
+        choice = resp.json()["choices"][0]
+        msg = choice["message"]
     except (requests.RequestException, ValueError, LookupError, TypeError) as e:
         raise LLMError(f"gateway call failed: {e}") from e
     answer = _THINK.sub("", msg.get("content") or "").strip()
-    # Providers name the thinking channel differently (Groq: reasoning).
-    reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
-    return answer, reasoning
+    # Asking again with the same budget would end the same way.
+    if not answer and choice.get("finish_reason") == "length":
+        raise LLMError("empty response: max_tokens used up before the answer")
+    return answer
 
 
 def _repair(text: str) -> str:
@@ -101,8 +103,8 @@ def chat(prompt: str, system: str | None = None, *, model: str | None = None,
          json_mode: bool = False, images: list[str] | None = None,
          temperature: float = 0.2, timeout: float = 90, max_tokens: int | None = None) -> str:
     """Send one prompt and return the answer text."""
-    answer, _ = _complete(_messages(prompt, system, images), model, json_mode,
-                          temperature, timeout, max_tokens)
+    answer = _complete(_messages(prompt, system, images), model, json_mode,
+                       temperature, timeout, max_tokens)
     if not answer:
         raise LLMError("empty response")
     return answer
@@ -117,20 +119,22 @@ def chat_json(prompt: str, system: str | None = None, *, model: str | None = Non
     ``check`` gets the parsed object and returns what the caller receives
     instead (e.g. a Pydantic model's ``model_validate``). An unparsable reply
     or a ``ValueError`` from ``check`` is answered with the error and asked
-    again, up to ``retries`` times. A thinking model that leaves the answer
-    empty and puts the JSON into its reasoning channel is read from there.
+    again, up to ``retries`` times. An empty answer counts as unusable, even if
+    the reasoning channel holds JSON: a draft from thinking is not the answer.
     """
     messages = _messages(prompt, system, images)
     for attempt in range(retries + 1):
-        answer, reasoning = _complete(messages, model, True, temperature, timeout, max_tokens)
-        reply = answer or reasoning
+        reply = _complete(messages, model, True, temperature, timeout, max_tokens)
         try:
+            if not reply:
+                raise ValueError("empty response")
             value = _parse_object(reply)
             return check(value) if check else value
         except ValueError as e:  # JSONDecodeError and Pydantic's ValidationError included
             error = e
+        # Some providers reject empty assistant content, some two user turns in a row.
         messages = messages + [
-            {"role": "assistant", "content": reply},
+            {"role": "assistant", "content": reply or "(no answer)"},
             {"role": "user", "content": f"Your reply was not usable ({error}). "
                                         "Reply with the JSON object only."},
         ]
