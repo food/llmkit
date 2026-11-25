@@ -124,9 +124,32 @@ except llmkit.LLMError as e:
 replies += [reply("42"), reply("{\"kcal\": 42}")]
 assert llmkit.chat_json("x") == {"kcal": 42}
 
-# --- empty content, answer only in the reasoning channel
-replies.append(reply(None, reasoning_content="{\"kcal\": 67}"))
-assert llmkit.chat_json("x") == {"kcal": 67}
+# --- empty content is asked again; JSON in the reasoning channel never counts
+for field in ("reasoning_content", "reasoning"):
+    replies += [reply(None, **{field: "{\"suitable\": \"yes\"}"}), reply("{\"suitable\": \"no\"}")]
+    assert llmkit.chat_json("x") == {"suitable": "no"}
+    retry = requests_seen[-1]["messages"]
+    assert [m["role"] for m in retry] == ["user", "assistant", "user"], retry
+    assert retry[1]["content"] and "empty response" in retry[2]["content"], retry
+
+replies += [reply(None, reasoning="{\"suitable\": \"yes\"}")] * 2
+try:
+    llmkit.chat_json("x")
+    raise AssertionError("expected LLMError")
+except llmkit.LLMError as e:
+    assert "empty response" in str(e), e
+
+# --- thinking used up max_tokens: no second try with the same budget
+before = len(requests_seen)
+cut = reply(None, reasoning="{\"suitable\": \"yes\"")
+cut["choices"][0]["finish_reason"] = "length"
+replies.append(cut)
+try:
+    llmkit.chat_json("x", max_tokens=50)
+    raise AssertionError("expected LLMError")
+except llmkit.LLMError as e:
+    assert "max_tokens" in str(e), e
+assert len(requests_seen) == before + 1
 
 # --- chat: plain text, explicit model, images as content parts, no JSON mode
 replies.append(reply("<think>hm</think>  Three sentences of coaching.  "))
